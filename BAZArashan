@@ -1,0 +1,404 @@
+create database taxi_server
+\c taxi_server;
+
+CREATE TABLE users (
+    user_id SERIAL PRIMARY KEY,
+    full_name VARCHAR(100) NOT NULL,
+    phone VARCHAR(20) UNIQUE NOT NULL,
+    birth_date DATE NOT NULL,
+    age INT CHECK (age >= 18),
+    email VARCHAR(100) UNIQUE,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE drivers (
+    driver_id SERIAL PRIMARY KEY,
+    user_id INT UNIQUE NOT NULL REFERENCES users(user_id),
+    license_number VARCHAR(50) UNIQUE NOT NULL,
+    rating DECIMAL(3,2) DEFAULT 5.0 CHECK (rating BETWEEN 1 AND 5),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE vehicles (
+    vehicle_id SERIAL PRIMARY KEY,
+    driver_id INT UNIQUE NOT NULL REFERENCES drivers(driver_id),
+    model VARCHAR(50) NOT NULL,
+    license_plate VARCHAR(20) UNIQUE NOT NULL,
+
+    color VARCHAR(20),
+    year INT CHECK (year > 2000)
+);
+
+CREATE TABLE orders (
+    order_id SERIAL PRIMARY KEY,
+    customer_id INT NOT NULL REFERENCES users(user_id),
+    driver_id INT REFERENCES drivers(driver_id),
+    pickup_location VARCHAR(255) NOT NULL,
+    dropoff_location VARCHAR(255) NOT NULL,
+    status VARCHAR(20) CHECK (status IN ('pending', 'accepted', 'completed', 'canceled')) DEFAULT 'pending',
+    fare DECIMAL(10,2),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+CREATE TABLE payments (
+    payment_id SERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES orders(order_id),
+    amount DECIMAL(10,2) NOT NULL,
+    payment_method VARCHAR(20) CHECK (payment_method IN ('card', 'cash', 'online')),
+    status VARCHAR(20) CHECK (status IN ('pending', 'completed', 'failed')) DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+CREATE TABLE reviews (
+    review_id SERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES orders(order_id),
+    rating INT CHECK (rating BETWEEN 1 AND 5) NOT NULL,
+    comment TEXT,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+
+CREATE TABLE routes (
+    route_id SERIAL PRIMARY KEY,
+    order_id INT NOT NULL REFERENCES orders(order_id),
+    start_lat DECIMAL(9,6),
+    start_lng DECIMAL(9,6),
+    end_lat DECIMAL(9,6),
+    end_lng DECIMAL(9,6),
+    distance_km DECIMAL(6,2)
+);
+
+CREATE TABLE driver_schedules (
+    schedule_id SERIAL PRIMARY KEY,
+    driver_id INT NOT NULL REFERENCES drivers(driver_id),
+    work_day DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL
+);
+
+
+CREATE TABLE notifications (
+    notification_id SERIAL PRIMARY KEY,
+    user_id INT NOT NULL REFERENCES users(user_id),
+    message TEXT NOT NULL,
+    status VARCHAR(20) CHECK (status IN ('sent', 'delivered', 'read')) DEFAULT 'sent',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+ALTER TABLE users
+ADD COLUMN first_name VARCHAR(50),
+ADD COLUMN last_name VARCHAR(50);
+
+ALTER TABLE users DROP COLUMN full_name;
+
+ALTER TABLE payments
+ADD COLUMN promo_id INTEGER,
+ADD CONSTRAINT fk_payments_promo FOREIGN KEY (promo_id) REFERENCES promo_codes(promo_id);
+
+
+CREATE TABLE locations (
+    location_id SERIAL PRIMARY KEY,
+    order_id INTEGER NOT NULL,
+    type VARCHAR(10) CHECK (type IN ('pickup', 'dropoff')),
+    address VARCHAR(255) NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE
+);
+
+
+INSERT INTO locations (order_id, type, address)
+VALUES
+    (11, 'pickup', '123 Main Street, City'),
+    (11, 'dropoff', '456 Elm Street, City');
+
+ALTER TABLE orders DROP COLUMN IF EXISTS pickup_location;
+ALTER TABLE orders DROP COLUMN IF EXISTS dropoff_location;
+
+
+CREATE VIEW user_vehicle_info AS
+SELECT
+    u.email,
+    v.model,
+    v.license_plate
+FROM users u
+JOIN drivers d ON u.user_id = d.user_id
+JOIN vehicles v ON d.driver_id = v.driver_id;
+
+
+
+--процедуралар
+
+create or replace procedure sp_add_user(
+    p_phone varchar,
+    p_birth_date date,
+    p_age integer,
+    p_email varchar,
+    p_first_name varchar,
+    p_last_name varchar
+)
+language plpgsql
+as $$
+begin
+    if exists(select 1 from users where email = p_email) then
+        raise exception 'Бұл email бар: %', p_email;
+    else
+        insert into users(phone, birth_date, age, email, first_name, last_name, created_at)
+        values (p_phone, p_birth_date, p_age, p_email, p_first_name, p_last_name, now());
+    end if;
+end;
+$$;
+
+call sp_add_user('87020820344', '2005-03-22', 20, 'zhanmoldaeva@gmail.com', 'raushan', 'zhanmoldaeva');
+call sp_add_user('87020820344', '2005-03-22', 20, 'zhanmoldaeva@gmail.com', 'raushan', 'zhanmoldaeva');
+
+
+
+create or replace procedure sp_insert_payment(
+    p_order_id int,
+    p_amount numeric,
+    p_method varchar,
+    p_status varchar,
+    p_promo_id int default null
+)
+language plpgsql
+as $$
+begin
+    insert into payments(order_id, amount, payment_method, status, created_at, promo_id)
+    values (p_order_id, p_amount, p_method, p_status, now(), p_promo_id);
+end;
+$$;
+
+call sp_insert_payment(11, 3000.00, 'card', 'completed', null);
+
+
+create or replace procedure sp_delete_review(
+    p_review_id int
+)
+language plpgsql
+as $$
+begin
+    if not exists(select 1 from reviews where review_id = p_review_id) then
+        raise exception 'Review табылмады: %', p_review_id;
+    else
+        delete from reviews where review_id = p_review_id;
+    end if;
+end;
+$$;
+
+call sp_delete_review(4);
+
+--функциялар
+
+
+CREATE OR REPLACE FUNCTION get_full_name(p_user_id INT)
+RETURNS TEXT AS $$
+DECLARE
+    full_name TEXT;
+BEGIN
+    SELECT first_name || ' ' || last_name INTO full_name
+    FROM users
+    WHERE user_id = p_user_id;
+
+    RETURN full_name;
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT get_full_name(1);
+
+
+
+CREATE OR REPLACE FUNCTION get_payment(p_order_id INT)
+RETURNS NUMERIC AS $$
+DECLARE
+    total NUMERIC;
+BEGIN
+    SELECT SUM(amount) INTO total
+    FROM payments
+    WHERE order_id = p_order_id;
+
+    RETURN COALESCE(total, 0);
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT get_payment(11);
+
+
+CREATE OR REPLACE FUNCTION driver_working(p_driver_id INT, p_date DATE)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1 FROM driver_schedules
+        WHERE driver_id = p_driver_id AND work_day = p_date
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+SELECT driver_working(1, '2025-04-22');
+
+
+-- тригерлерр
+--Жүйелік
+
+CREATE OR REPLACE FUNCTION delet_users()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Жүйелік пайдаланушыларды жоймаймыз';
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER delet_users_trigger
+BEFORE DELETE ON users
+FOR EACH ROW
+EXECUTE FUNCTION delet_users();
+
+DELETE FROM users WHERE user_id = 1;
+
+
+--лог
+
+CREATE TABLE order_log (
+    log_id SERIAL PRIMARY KEY,
+    order_id INT NOT NULL,
+    old_status VARCHAR(20),
+    new_status VARCHAR(20),
+    changed_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE OR REPLACE FUNCTION log_order_update()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO order_log(order_id, old_status, new_status, changed_at)
+    VALUES (OLD.order_id, OLD.status, NEW.status, NOW());
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER log_order_update_trigger
+AFTER UPDATE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION log_order_update();
+
+UPDATE orders SET status = 'completed' WHERE order_id = 11;
+
+
+--оператор денгей
+
+CREATE OR REPLACE FUNCTION fare()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.fare < 0 THEN
+        RAISE EXCEPTION 'Тапсырыстың бағасы теріс бола алмайды!';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER fare_trigger
+BEFORE INSERT OR UPDATE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION fare();
+
+INSERT INTO orders (driver_id, status, fare) VALUES (1, 'pending', -50);
+
+INSERT INTO orders (driver_id, status, fare) VALUES (1, 'pending', 50);
+
+
+-- жол денгейи
+CREATE OR REPLACE FUNCTION check_order_fare()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.fare < 10 THEN
+        RAISE EXCEPTION 'Тапсырыстың бағасы кемінде 10 болуы керек';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_order_fare_trigger
+BEFORE INSERT OR UPDATE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION check_order_fare();
+
+UPDATE orders SET fare = 50 WHERE order_id = 1;
+
+--instead
+
+CREATE TABLE orders_archive (
+    order_id INT,
+    customer_id INT,
+    driver_id INT,
+    status VARCHAR(20),
+    fare DECIMAL(10,2),
+    created_at TIMESTAMP
+);
+
+CREATE OR REPLACE FUNCTION insert_into_vw_orders()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO orders(driver_id, status, fare, created_at)
+    VALUES ( NEW.driver_id, NEW.status, NEW.fare, NEW.created_at);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+
+CREATE TRIGGER trg_insert_vw_orders
+INSTEAD OF INSERT ON vw_orders
+FOR EACH ROW
+EXECUTE FUNCTION insert_into_vw_orders();
+
+INSERT INTO vw_orders (driver_id, status, fare, created_at)
+VALUES (12, 'pending', 1000, NOW());
+
+
+--таранзация
+
+BEGIN;
+
+INSERT INTO orders (driver_id, status, fare)
+VALUES (11, 'pending', 1200);
+
+COMMIT;
+
+
+BEGIN;
+
+INSERT INTO orders (driver_id, status, fare)
+VALUES (12, 'pending', 3000);
+
+-- Сақтау нүктесі
+SAVEPOINT before_invalid;
+
+-- Жарамсыз статус (қате тудырады)
+INSERT INTO orders (driver_id, status, fare)
+VALUES (1, 'invalid_status', 1000);  -- Қате
+
+-- Қате шыққаннан кейін
+ROLLBACK TO before_invalid;
+
+-- Сақталған дұрыс жазбаны қалдыру
+COMMIT;
+
+
+DO $$
+BEGIN
+    BEGIN
+        INSERT INTO orders (driver_id, status, fare)
+        VALUES (1, 'canceled', -500);  -- fare теріс болса, триггер ұстап қалуы мүмкін
+    EXCEPTION WHEN others THEN
+        RAISE NOTICE 'Қате шықты — транзакция орындалмады.';
+    END;
+END;
+$$;
+
+BEGIN;
+
+INSERT INTO orders (driver_id, status, fare)
+VALUES (13, 'pending', 1000);
+
+INSERT INTO orders (driver_id, status, fare)
+VALUES (13, 'fail_status', 500);  -- Қате тудырады
+
+ROLLBACK;
